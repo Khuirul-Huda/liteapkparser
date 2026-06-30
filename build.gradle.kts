@@ -40,6 +40,7 @@ android {
 }
 
 dependencies {
+    implementation("org.jetbrains.kotlin:kotlin-stdlib:1.9.24")
     testImplementation("junit:junit:4.13.2")
 }
 
