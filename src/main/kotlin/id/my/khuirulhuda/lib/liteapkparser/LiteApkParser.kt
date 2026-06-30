@@ -15,7 +15,8 @@ class LiteApkParser {
         val dangerousPermissions: List<String>,
         val highEntropyDetected: Boolean,
         val xorObfuscationDetected: Boolean,
-        val matchedPatterns: List<String>
+        val matchedPatterns: List<String>,
+        val extractedEvidence: List<String>
     )
 
     enum class TriageStatus { SAFE, GREY_AREA, MALICIOUS }
@@ -68,6 +69,9 @@ class LiteApkParser {
         val bais = ByteArrayInputStream(dexBytes)
         val offsetStream = OffsetInputStream(bais)
 
+        val candidateKeys = mutableListOf<String>()
+        val candidateCiphertexts = mutableListOf<String>()
+
         // 1. Read header (we need at least 64 bytes)
         val header = ByteArray(64)
         var totalRead = 0
@@ -119,6 +123,14 @@ class LiteApkParser {
                 val stringBytes = readMutf8Bytes(offsetStream)
                 val decodedString = decodeMutf8(stringBytes)
 
+                val trimmed = decodedString.trim()
+                if (trimmed.length in listOf(16, 24, 32)) {
+                    candidateKeys.add(trimmed)
+                }
+                if (trimmed.length >= 20 && decodeBase64Pure(trimmed) != null) {
+                    candidateCiphertexts.add(trimmed)
+                }
+
                 runStringScanners(decodedString, resultBuilder)
 
                 nextStringIdx++
@@ -160,6 +172,14 @@ class LiteApkParser {
                 }
             }
         }
+
+        println("  [DEX CANDIDATES] keys: ${candidateKeys.size}, ciphertexts: ${candidateCiphertexts.size}")
+        if (candidateKeys.isNotEmpty() && candidateCiphertexts.isNotEmpty()) {
+            for (ciphertext in candidateCiphertexts) {
+                tryDecryptAes(ciphertext, candidateKeys, resultBuilder)
+            }
+        }
+        scanShortArrays(dexBytes, resultBuilder)
     }
 
     private fun runStringScanners(s: String, resultBuilder: AnalysisResultBuilder) {
@@ -234,6 +254,7 @@ class LiteApkParser {
 
         if (runDecoder) {
             tryDecryptXorAndBase64(s, resultBuilder)
+            tryDecryptRepeatedXor(s, resultBuilder)
         }
     }
 
@@ -252,19 +273,24 @@ class LiteApkParser {
         val interestingKeywords = listOf(
             "http://", "https://", "pm install", "cmd package", 
             "bin/sh", "bin/su", "DexClassLoader", "frida", "xposed",
-            "isDebuggerConnected", "ro.kernel.qemu"
+            "isDebuggerConnected", "ro.kernel.qemu", "api.telegram.org",
+            "botToken", "bot_token", "botToken2", "/sendMessage", "chat_id"
         )
 
-        for (candidate in candidates) {
-            // Try 1-byte XOR brute force (keys 1 to 255)
-            for (key in 1..255) {
+        for (candidateIdx in candidates.indices) {
+            val candidate = candidates[candidateIdx]
+            val isBase64 = (candidateIdx > 0)
+
+            for (key in 0..255) {
+                // If not base64 and key is 0, it's just raw plaintext (already scanned), skip it.
+                if (!isBase64 && key == 0) continue
+
                 val decrypted = ByteArray(candidate.size)
                 for (i in candidate.indices) {
                     decrypted[i] = (candidate[i].toInt() xor key).toByte()
                 }
                 val decStr = try {
                     val str = String(decrypted, Charsets.UTF_8)
-                    // Check if it's mostly printable ASCII
                     if (str.all { it.code in 32..126 || it == '\n' || it == '\r' || it == '\t' }) str else null
                 } catch (e: Exception) {
                     null
@@ -273,9 +299,10 @@ class LiteApkParser {
                 if (decStr != null && decStr.length >= 6) {
                     for (kw in interestingKeywords) {
                         if (decStr.contains(kw, ignoreCase = true)) {
+                            println("    [DECRYPTED LITERAL (1-byte XOR key=$key)] '${decStr.trim()}'")
+                            resultBuilder.extractedEvidence.add(decStr.trim())
                             resultBuilder.xorObfuscationDetected = true
                             resultBuilder.verifiedObfuscatedPayload = true
-                            // Scan the decrypted string recursively (do not run decoder on decrypted to avoid loop)
                             runStringScannersInternal(decStr, resultBuilder, runDecoder = false)
                             break
                         }
@@ -283,6 +310,181 @@ class LiteApkParser {
                 }
             }
         }
+    }
+
+    private fun tryDecryptRepeatedXor(s: String, resultBuilder: AnalysisResultBuilder) {
+        val clean = s.trim()
+        if (clean.length < 8) return
+
+        val decodedBase64 = decodeBase64Pure(clean)
+        val candidate = decodedBase64 ?: clean.toByteArray(Charsets.UTF_8)
+
+        val commonKeys = listOf("key", "secret", "payload", "token", "bot", "admin", "password")
+        val interestingKeywords = listOf(
+            "http://", "https://", "pm install", "cmd package", 
+            "bin/sh", "bin/su", "DexClassLoader", "api.telegram.org"
+        )
+
+        for (keyStr in commonKeys) {
+            val keyBytes = keyStr.toByteArray(Charsets.UTF_8)
+            val decrypted = ByteArray(candidate.size)
+            for (i in candidate.indices) {
+                decrypted[i] = (candidate[i].toInt() xor keyBytes[i % keyBytes.size].toInt()).toByte()
+            }
+            val decStr = try {
+                val str = String(decrypted, Charsets.UTF_8)
+                if (str.all { it.code in 32..126 || it == '\n' || it == '\r' || it == '\t' }) str else null
+            } catch (e: Exception) {
+                null
+            }
+
+            if (decStr != null && decStr.length >= 6) {
+                for (kw in interestingKeywords) {
+                    if (decStr.contains(kw, ignoreCase = true)) {
+                        println("    [DECRYPTED LITERAL (repeated XOR key=$keyStr)] '${decStr.trim()}'")
+                        resultBuilder.extractedEvidence.add(decStr.trim())
+                        resultBuilder.xorObfuscationDetected = true
+                        resultBuilder.verifiedObfuscatedPayload = true
+                        runStringScannersInternal(decStr, resultBuilder, runDecoder = false)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun tryDecryptAes(
+        ciphertextBase64: String,
+        keys: List<String>,
+        resultBuilder: AnalysisResultBuilder
+    ) {
+        val ciphertextBytes = decodeBase64Pure(ciphertextBase64.trim()) ?: return
+        if (ciphertextBytes.size < 16) return
+
+        val interestingKeywords = listOf(
+            "http://", "https://", "pm install", "cmd package", 
+            "bin/sh", "bin/su", "DexClassLoader", "api.telegram.org",
+            "botToken", "bot_token", "chat_id", "/sendMessage"
+        )
+
+        for (keyStr in keys) {
+            val keyBytes = keyStr.toByteArray(Charsets.UTF_8)
+            val modes = listOf("AES/ECB/PKCS5Padding", "AES/CBC/PKCS5Padding")
+            for (mode in modes) {
+                try {
+                    val keySpec = javax.crypto.spec.SecretKeySpec(keyBytes, "AES")
+                    val cipher = javax.crypto.Cipher.getInstance(mode)
+                    
+                    if (mode.contains("CBC")) {
+                        // Try IV equal to key, or IV equal to all zeros
+                        val ivs = listOf(keyBytes.copyOf(16), ByteArray(16))
+                        for (iv in ivs) {
+                            try {
+                                val ivSpec = javax.crypto.spec.IvParameterSpec(iv)
+                                cipher.init(javax.crypto.Cipher.DECRYPT_MODE, keySpec, ivSpec)
+                                val decrypted = cipher.doFinal(ciphertextBytes)
+                                val decStr = String(decrypted, Charsets.UTF_8).trim()
+                                 if (decStr.length >= 6 && interestingKeywords.any { decStr.contains(it, ignoreCase = true) }) {
+                                    val cleanedStr = decStr.filter { it.code in 32..126 || it == '\n' || it == '\r' || it == '\t' }.trim()
+                                    println("    [DECRYPTED LITERAL (AES/CBC key=$keyStr)] '$cleanedStr'")
+                                    resultBuilder.extractedEvidence.add(cleanedStr)
+                                    resultBuilder.xorObfuscationDetected = true
+                                    resultBuilder.verifiedObfuscatedPayload = true
+                                    runStringScannersInternal(decStr, resultBuilder, runDecoder = false)
+                                    return
+                                }
+                            } catch (e: Exception) {}
+                        }
+                    } else {
+                        cipher.init(javax.crypto.Cipher.DECRYPT_MODE, keySpec)
+                        val decrypted = cipher.doFinal(ciphertextBytes)
+                        val decStr = String(decrypted, Charsets.UTF_8).trim()
+                        if (decStr.length >= 6 && interestingKeywords.any { decStr.contains(it, ignoreCase = true) }) {
+                            val cleanedStr = decStr.filter { it.code in 32..126 || it == '\n' || it == '\r' || it == '\t' }.trim()
+                            println("    [DECRYPTED LITERAL (AES/ECB key=$keyStr)] '$cleanedStr'")
+                            resultBuilder.extractedEvidence.add(cleanedStr)
+                            resultBuilder.xorObfuscationDetected = true
+                            resultBuilder.verifiedObfuscatedPayload = true
+                            runStringScannersInternal(decStr, resultBuilder, runDecoder = false)
+                            return
+                        }
+                    }
+                } catch (e: Exception) {}
+            }
+        }
+    }
+
+    private fun scanShortArrays(dexBytes: ByteArray, resultBuilder: AnalysisResultBuilder) {
+        val interestingKeywords = listOf(
+            "api.telegram.org", "botToken", "/sendMessage", "chat_id", "http://", "https://"
+        )
+
+        var foundPayloads = 0
+        var offset = 0
+        while (offset <= dexBytes.size - 8) {
+            // Match the array-data opcode for 16-bit elements (0x0300 -> 00 03) with element width 2 (0x0002 -> 02 00)
+            if (dexBytes[offset] == 0x00.toByte() && dexBytes[offset + 1] == 0x03.toByte() &&
+                dexBytes[offset + 2] == 0x02.toByte() && dexBytes[offset + 3] == 0x00.toByte()
+            ) {
+                foundPayloads++
+                val count = (dexBytes[offset + 4].toInt() and 0xFF) or
+                            ((dexBytes[offset + 5].toInt() and 0xFF) shl 8) or
+                            ((dexBytes[offset + 6].toInt() and 0xFF) shl 16) or
+                            ((dexBytes[offset + 7].toInt() and 0xFF) shl 24)
+
+                if (count in 4..4000 && offset + 8 + count * 2 <= dexBytes.size) {
+                    val shortArray = IntArray(count)
+                    for (i in 0 until count) {
+                        val base = offset + 8 + i * 2
+                        shortArray[i] = (dexBytes[base].toInt() and 0xFF) or ((dexBytes[base + 1].toInt() and 0xFF) shl 8)
+                    }
+
+                    // Brute force 16-bit key
+                    for (key in 0..65535) {
+                        val chars = CharArray(count)
+                        for (i in 0 until count) {
+                            chars[i] = (shortArray[i] xor key).toChar()
+                        }
+                        val decryptedStr = String(chars)
+                        for (kw in interestingKeywords) {
+                            if (decryptedStr.contains(kw, ignoreCase = true)) {
+                                val matches = extractPrintableSubstrings(decryptedStr)
+                                for (match in matches) {
+                                    if (match.length >= 6) {
+                                        println("    [DECRYPTED SHORT ARRAY STRING (key=$key)] '$match'")
+                                        resultBuilder.extractedEvidence.add(match)
+                                        resultBuilder.xorObfuscationDetected = true
+                                        resultBuilder.verifiedObfuscatedPayload = true
+                                        runStringScannersInternal(match, resultBuilder, runDecoder = false)
+                                    }
+                                }
+                                break
+                            }
+                        }
+                    }
+                }
+            }
+            offset += 2
+        }
+        println("  [SHORT ARRAYS] Found $foundPayloads array-data payloads in this DEX")
+    }
+
+    private fun extractPrintableSubstrings(s: String): List<String> {
+        val list = mutableListOf<String>()
+        val current = StringBuilder()
+        for (c in s) {
+            if (c.code in 32..126 || c == '\n' || c == '\r' || c == '\t') {
+                current.append(c)
+            } else {
+                if (current.length >= 6) {
+                    list.add(current.toString().trim())
+                }
+                current.setLength(0)
+            }
+        }
+        if (current.length >= 6) {
+            list.add(current.toString().trim())
+        }
+        return list
     }
 
     private fun decodeBase64Pure(s: String): ByteArray? {
@@ -666,11 +868,11 @@ class LiteApkParser {
         private val stringPool = ArrayList<String>()
 
         fun parse(): XmlManifestInfo {
-            if (data.size < 8) return XmlManifestInfo(emptyList(), false)
+            if (data.size < 8) return XmlManifestInfo(emptyList(), false, emptyList(), emptyList())
             val magic = readInt(0)
             println("  [DEBUG XML MAGIC] magic = ${String.format("0x%08X", magic)}")
             if (magic != 0x00080003) {
-                return XmlManifestInfo(emptyList(), false)
+                return XmlManifestInfo(emptyList(), false, emptyList(), emptyList())
             }
             val fileSize = readInt(4)
             offset = 8
@@ -679,6 +881,7 @@ class LiteApkParser {
             var deviceAdminEnabled = false
             var currentComponentClass: String? = null
             val receivers = mutableListOf<String>()
+            val services = mutableListOf<String>()
 
             while (offset < data.size && offset < fileSize) {
                 val chunkType = readInt(offset)
@@ -730,6 +933,7 @@ class LiteApkParser {
                             receivers.add(attrNameValue)
                             currentComponentClass = attrNameValue
                         } else if (tagName == "service" && attrNameValue != null) {
+                            services.add(attrNameValue)
                             currentComponentClass = attrNameValue
                         } else if (tagName == "action" && attrNameValue == "android.app.action.DEVICE_ADMIN_ENABLED") {
                             if (currentComponentClass != null && receivers.contains(currentComponentClass)) {
@@ -748,7 +952,7 @@ class LiteApkParser {
                 offset += chunkSize
             }
 
-            return XmlManifestInfo(permissions, deviceAdminEnabled)
+            return XmlManifestInfo(permissions, deviceAdminEnabled, receivers, services)
         }
 
         private fun parseStringPool(startOffset: Int) {
@@ -851,7 +1055,9 @@ class LiteApkParser {
 
     private data class XmlManifestInfo(
         val permissions: List<String>,
-        val deviceAdminEnabled: Boolean
+        val deviceAdminEnabled: Boolean,
+        val receivers: List<String>,
+        val services: List<String>
     )
 
     private class AnalysisResultBuilder {
@@ -863,6 +1069,7 @@ class LiteApkParser {
         var hasOnlyDebuggerConnected = false
         var hasOtherAntiAnalysis = false
         val matchedPatterns = mutableSetOf<String>()
+        val extractedEvidence = mutableSetOf<String>()
 
         fun addManifestInfo(info: XmlManifestInfo) {
             println("  [DEBUG] All Parsed Permissions: ${info.permissions}")
@@ -883,6 +1090,19 @@ class LiteApkParser {
             }
             if (info.deviceAdminEnabled) {
                 matchedPatterns.add("DEVICE_ADMIN")
+            }
+
+            // Check for known malicious receiver and service class suffixes
+            val suspiciousComponentNames = listOf("ReceiveSms", "SendSMS", "SMSReceiver", "SmsReceiver", "NotificationService")
+            for (rec in info.receivers) {
+                if (suspiciousComponentNames.any { rec.endsWith(it) || rec.contains(".$it") }) {
+                    matchedPatterns.add("SUSPICIOUS_COMPONENT")
+                }
+            }
+            for (srv in info.services) {
+                if (suspiciousComponentNames.any { srv.endsWith(it) || srv.contains(".$it") }) {
+                    matchedPatterns.add("SUSPICIOUS_COMPONENT")
+                }
             }
         }
 
@@ -950,6 +1170,11 @@ class LiteApkParser {
                 score += 20
             }
 
+            // Suspicious component names matching known malware patterns (e.g. ReceiveSms, NotificationService)
+            if (matchedPatterns.contains("SUSPICIOUS_COMPONENT")) {
+                score += 20
+            }
+
             score = maxOf(0, minOf(100, score))
 
             val status = when {
@@ -964,7 +1189,8 @@ class LiteApkParser {
                 dangerousPermissions = dangerousPermissions,
                 highEntropyDetected = highEntropyDetected,
                 xorObfuscationDetected = xorObfuscationDetected,
-                matchedPatterns = matchedPatterns.toList()
+                matchedPatterns = matchedPatterns.toList(),
+                extractedEvidence = extractedEvidence.toList()
             )
         }
     }

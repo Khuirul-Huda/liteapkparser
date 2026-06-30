@@ -26,6 +26,7 @@ class LiteApkParserTest {
                 println("High Entropy Detected: ${result.highEntropyDetected}")
                 println("XOR Obfuscation Detected: ${result.xorObfuscationDetected}")
                 println("Matched Patterns: ${result.matchedPatterns}")
+                println("Extracted Evidence: ${result.extractedEvidence}")
                 println("==================================================")
             }
         } else {
