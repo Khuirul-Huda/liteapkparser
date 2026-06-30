@@ -1,0 +1,30 @@
+# Gradle files
+.gradle/
+build/
+/build
+/*/build
+/out
+.kotlin
+
+# Android Studio and IntelliJ IDEA files
+.idea/
+*.iml
+*.ipr
+*.iws
+.navigation/
+captures/
+.externalNativeBuild/
+.cxx/
+local.properties
+
+# OS files
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Log files
+*.log
+
+# Gradle crash logs
+crashlytics-build-metadata.xml
