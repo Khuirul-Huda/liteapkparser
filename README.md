@@ -86,6 +86,33 @@ println("Matched Signatures: ${result.matchedPatterns}")
 println("Extracted Evidence: ${result.extractedEvidence}") // Lists decrypted URLs, Bot Tokens, C2 Domains
 ```
 
+### Sample Triage Output
+
+Below is an example of the structured triage results returned when scanning a real SMS stealer payload (`malicious_sms_rce_telegram.apk`):
+
+```json
+{
+  "score": 100,
+  "status": "MALICIOUS",
+  "dangerousPermissions": [
+    "android.permission.RECEIVE_SMS",
+    "android.permission.SEND_SMS"
+  ],
+  "highEntropyDetected": false,
+  "xorObfuscationDetected": true,
+  "matchedPatterns": [
+    "NATIVE_EXECUTION",
+    "TELEGRAM_BOT",
+    "SUSPICIOUS_COMPONENT",
+    "SMS_STEALER"
+  ],
+  "extractedEvidence": [
+    "https://api.telegram.org/bot*****/sendMessage?parse_mode=markdown&chat_id=******&text=*",
+    "https://api.telegram.org/bot******/sendMessage?parse_mode=markdown&chat_id=******&text=SOme Text * %0A*Kepada* : _"
+  ]
+}
+```
+
 ---
 
 ## Running Tests
