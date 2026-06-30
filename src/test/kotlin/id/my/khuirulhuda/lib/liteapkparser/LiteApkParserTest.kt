@@ -55,26 +55,23 @@ class LiteApkParserTest {
 
     @Test
     fun testXorOpcodeDetector() {
-        val detectorClass = LiteApkParser::class.java.declaredClasses.first { it.simpleName == "XorOpcodeDetector" }
-        val detector = detectorClass.getDeclaredConstructor().newInstance()
-        val feedMethod = detectorClass.getMethod("feed", Int::class.java)
+        val detector = XorOpcodeDetector()
 
-        // Pattern: 0x48 (aget-byte), then 0xeb (xor-int/2addr), then 0x4c (aput-byte)
         // Feed unrelated bytes
         for (i in 0..30) {
-            val detected = feedMethod.invoke(detector, 0x00) as Boolean
+            val detected = detector.feed(0x00)
             assertFalse(detected)
         }
 
         // Feed pattern
-        assertFalse(feedMethod.invoke(detector, 0x48) as Boolean) // aget-byte
-        assertFalse(feedMethod.invoke(detector, 0x01) as Boolean)
-        assertFalse(feedMethod.invoke(detector, 0xeb) as Boolean) // xor
-        assertFalse(feedMethod.invoke(detector, 0x02) as Boolean)
-        assertFalse(feedMethod.invoke(detector, 0x28) as Boolean) // loop branch (goto)
+        assertFalse(detector.feed(0x48)) // aget-byte
+        assertFalse(detector.feed(0x01))
+        assertFalse(detector.feed(0xeb)) // xor
+        assertFalse(detector.feed(0x02))
+        assertFalse(detector.feed(0x28)) // loop branch (goto)
         
         // Final trigger on aput-byte
-        val detected = feedMethod.invoke(detector, 0x4c) as Boolean // aput-byte
+        val detected = detector.feed(0x4c) // aput-byte
         assertTrue(detected)
     }
 
@@ -98,8 +95,6 @@ class LiteApkParserTest {
 
     @Test
     fun testXorAndBase64Decryption() {
-        val parser = LiteApkParser()
-        
         // 1. Prepare target string: "http://malicious-url.com"
         val target = "http://malicious-url.com"
         val key = 0x5A
@@ -123,22 +118,16 @@ class LiteApkParserTest {
         val base64EncodedXored = sb.toString()
         
         // 2. Setup AnalysisResultBuilder
-        val builderClass = LiteApkParser::class.java.declaredClasses.first { it.simpleName == "AnalysisResultBuilder" }
-        val builder = builderClass.getDeclaredConstructor().newInstance()
+        val builder = LiteApkParser.AnalysisResultBuilder()
         
         // 3. Invoke tryDecryptXorAndBase64
-        val decryptMethod = LiteApkParser::class.java.getDeclaredMethod("tryDecryptXorAndBase64", String::class.java, builderClass).apply {
-            isAccessible = true
+        Deobfuscator.tryDecryptXorAndBase64(base64EncodedXored, builder) {
+            // Callback placeholder
         }
         
-        decryptMethod.invoke(parser, base64EncodedXored, builder)
-        
         // 4. Verify detection
-        val xorObfuscationDetectedField = builderClass.getDeclaredField("xorObfuscationDetected").apply { isAccessible = true }
-        val verifiedObfuscatedPayloadField = builderClass.getDeclaredField("verifiedObfuscatedPayload").apply { isAccessible = true }
-        
-        assertTrue(xorObfuscationDetectedField.get(builder) as Boolean)
-        assertTrue(verifiedObfuscatedPayloadField.get(builder) as Boolean)
+        assertTrue(builder.xorObfuscationDetected)
+        assertTrue(builder.verifiedObfuscatedPayload)
     }
 }
 
