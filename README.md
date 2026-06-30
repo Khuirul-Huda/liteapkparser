@@ -2,6 +2,9 @@
 
 LiteApkParser is a lightweight, high-performance offline-first static triage security scanning library (AAR) written in Clean Kotlin. It is specifically designed to run directly on Android devices under strict memory constraints. It identifies suspicious patterns, obfuscation, droppers, and dangerous permissions in Android APK files **without executing any code** and **without decompressing the entire APK to disk**.
 
+> [!IMPORTANT]
+> **Disclaimer:** This tool is designed strictly for **educational purposes**, authorized research, and security analysis of Android packages. It must not be used for unauthorized target scanning or malicious activity. The author assumes no liability for misuse or damage caused by this utility.
+
 ---
 
 ## Key Features
@@ -9,11 +12,14 @@ LiteApkParser is a lightweight, high-performance offline-first static triage sec
 *   **Low-Memory ZIP Stream Sequential Parser:** 
     Uses a custom circular byte buffer (8 KB) and `PushbackInputStream` layout synchronization to scan ZIP local file headers sequentially, bypassing the need to read or cache the Central Directory.
 *   **Zero-Copy Binary XML Parser:**
-    Directly parses Android's binary XML chunk layout (`AndroidManifest.xml`) to extract declared permissions, components, and Device Administrator bindings.
+    Directly parses Android's binary XML chunk layout (`AndroidManifest.xml`) to extract declared permissions, and collects registered component names (receivers, services, device administrators) to detect suspicious class patterns.
 *   **Forward-Only DEX String Pool Parser:**
     Parses DEX file headers and streams string ID offsets sequentially, preventing out-of-order stream-skipping and JVM Out-Of-Memory (OOM) errors.
-*   **XOR & Base64 Decryption Pipeline:**
-    Automatically extracts high-entropy strings, decodes Base64 inputs, and brute-forces 1-byte XOR keys (`1..255`) to recursively triage hidden payloads.
+*   **Deep Deobfuscation & Decryption Engine:**
+    *   **1-Byte XOR & Base64 Decoder:** Automatically decodes Base64 inputs, and brute-forces 1-byte XOR keys (`0..255`) recursively.
+    *   **Candidate-based AES Decryptor:** Collects candidate key and ciphertext strings from the DEX pool and attempts automated decryption (ECB & CBC modes) during static scanning.
+    *   **16-Bit Short Array Brute-Forcer:** Searches raw DEX bytecode for 16-bit static array initializer payloads (`00 03 02 00` array-data headers) and brute-forces GPR/XOR keys (`0..65535`) to reverse custom Unicode/identifier encryption dynamically.
+    *   **Evidence Collection:** Automatically extracts and records decrypted C2 domains, Telegram API credentials, exfiltrated texts, or hidden URL configurations.
 *   **Refined Heuristics:**
     *   XOR bytecode loops verification (requires conditional branch instruction checks).
     *   Exclusion of standard classpath loader patterns (e.g., `PathClassLoader`) to prevent false positives.
@@ -72,11 +78,12 @@ val apkFile = File("/path/to/target.apk")
 val result = parser.analyzeApk(apkFile)
 
 // Access analysis metrics
-println("Risk Score: ${result.score}")            // Int (0..100)
-println("Triage Status: ${result.status}")       // SAFE, GREY_AREA, or DANGEROUS
+println("Risk Score: ${result.score}")                 // Int (0..100)
+println("Triage Status: ${result.status}")             // SAFE, GREY_AREA, or MALICIOUS
 println("Dangerous Perms: ${result.dangerousPermissions}")
 println("Obfuscated payload found: ${result.xorObfuscationDetected}")
 println("Matched Signatures: ${result.matchedPatterns}")
+println("Extracted Evidence: ${result.extractedEvidence}") // Lists decrypted URLs, Bot Tokens, C2 Domains
 ```
 
 ---
@@ -90,12 +97,12 @@ To run the local JUnit unit tests:
 ./gradlew test
 
 # To run integration tests against a real APK, copy your target to the root directory
-cp "/path/to/suspicious.apk" test.apk
-./gradlew test
+# and run the test suite to observe decrypted evidence dumps
+./gradlew test --info
 ```
 
 ---
 
 ## License
-Owned and developed by [Khuirul Huda](https://github.com/Khuirul-Huda).
+Owned and developed by [Khuirul Huda](https://github.com/Khuirul-Huda).  
 Licensed under the Apache License, Version 2.0.
