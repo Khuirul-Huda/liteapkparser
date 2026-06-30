@@ -127,10 +127,36 @@ class LiteApkParser {
                     nextStringIdx++
                 }
             } else {
-                val b = offsetStream.read()
-                if (b == -1) break
-                if (xorDetector.feed(b)) {
-                    resultBuilder.xorObfuscationDetected = true
+                val nextOffset = if (nextStringIdx < sortedOffsets.size) sortedOffsets[nextStringIdx].toLong() else -1L
+                if (nextOffset != -1L) {
+                    val bytesToRead = (nextOffset - currentOffset).toInt()
+                    if (bytesToRead > 0) {
+                        val tempBuf = ByteArray(minOf(8192, bytesToRead))
+                        var remaining = bytesToRead
+                        while (remaining > 0) {
+                            val chunk = minOf(remaining, tempBuf.size)
+                            val read = offsetStream.read(tempBuf, 0, chunk)
+                            if (read <= 0) break
+                            for (i in 0 until read) {
+                                if (xorDetector.feed(tempBuf[i].toInt() and 0xFF)) {
+                                    resultBuilder.xorObfuscationDetected = true
+                                }
+                            }
+                            remaining -= read
+                        }
+                    }
+                } else {
+                    val tempBuf = ByteArray(8192)
+                    while (true) {
+                        val read = offsetStream.read(tempBuf)
+                        if (read <= 0) break
+                        for (i in 0 until read) {
+                            if (xorDetector.feed(tempBuf[i].toInt() and 0xFF)) {
+                                resultBuilder.xorObfuscationDetected = true
+                            }
+                        }
+                    }
+                    break
                 }
             }
         }
@@ -432,31 +458,35 @@ class LiteApkParser {
         private var head = 0
         private var count = 0
 
+        private val isBranchOpcode = BooleanArray(256).apply {
+            val branchOpcodes = setOf(0x28, 0x29, 0x2a, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d)
+            for (op in branchOpcodes) {
+                this[op] = true
+            }
+        }
+
         fun feed(b: Int): Boolean {
             history[head] = b
-            head = (head + 1) % history.size
-            if (count < history.size) count++
+            head = (head + 1) and 31
+            if (count < 32) count++
 
-            if (count == history.size) {
+            if (count == 32) {
                 var index48 = -1
                 var indexXor = -1
                 var index4c = -1
                 var hasLoopBranch = false
 
-                // Dalvik branch / jump instruction opcodes
-                val branchOpcodes = setOf(0x28, 0x29, 0x2a, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d)
-
-                for (i in 0 until history.size) {
-                    val idx = (head + i) % history.size
+                for (i in 0 until 32) {
+                    val idx = (head + i) and 31
                     val valAt = history[idx]
                     if (valAt == 0x48) {
                         index48 = i
-                    } else if ((valAt == 0xeb || valAt == 0xf9 || valAt == 0xdb || valAt == 0xd3 || valAt == 0xec) && index48 != -1) {
+                    } else if (index48 != -1 && (valAt == 0xeb || valAt == 0xf9 || valAt == 0xdb || valAt == 0xd3 || valAt == 0xec)) {
                         indexXor = i
-                    } else if (valAt == 0x4c && indexXor != -1) {
+                    } else if (indexXor != -1 && valAt == 0x4c) {
                         index4c = i
                     }
-                    if (branchOpcodes.contains(valAt)) {
+                    if (valAt in 0..255 && isBranchOpcode[valAt]) {
                         hasLoopBranch = true
                     }
                 }
