@@ -188,10 +188,22 @@ class LiteApkParser {
 
         // Native Execution / Shell
         if (s.contains("Runtime.getRuntime().exec") ||
-            s.contains("/system/bin/sh") ||
-            s.contains("/system/bin/su")
+            s == "/system/bin/sh" ||
+            s == "/system/bin/su" ||
+            s == "sh" || s == "su" ||
+            s == "su -c"
         ) {
             resultBuilder.matchedPatterns.add("NATIVE_EXECUTION")
+        }
+
+        // Telegram Bot API (strict matching to avoid false positives on standard Handler.sendMessage)
+        if (s.contains("api.telegram.org") ||
+            s == "botToken" ||
+            s == "bot_token" ||
+            s == "botToken2" ||
+            (s.contains("/sendMessage") && s.contains("bot"))
+        ) {
+            resultBuilder.matchedPatterns.add("TELEGRAM_BOT")
         }
 
         if (runDecoder) {
@@ -889,6 +901,23 @@ class LiteApkParser {
             // XOR decryption loop pattern detected
             if (xorObfuscationDetected) {
                 score += 15
+            }
+
+            // Telegram Bot API patterns found
+            if (matchedPatterns.contains("TELEGRAM_BOT")) {
+                score += 25
+            }
+
+            // SMS Stealer / RCE Bot logic: SMS permissions + Telegram bot patterns
+            if (hasSms && matchedPatterns.contains("TELEGRAM_BOT")) {
+                matchedPatterns.add("SMS_STEALER")
+                score += 25
+            }
+
+            // Dropper logic: Installer permissions + Silent install patterns
+            if (hasInstaller && matchedPatterns.contains("SILENT_INSTALL")) {
+                matchedPatterns.add("DROPPER")
+                score += 20
             }
 
             score = maxOf(0, minOf(100, score))

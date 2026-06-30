@@ -12,20 +12,24 @@ class LiteApkParserTest {
 
     @Test
     fun testAnalyzeApkReal() {
-        val apkFile = File("test.apk")
-        if (apkFile.exists()) {
+        val sampleDir = File("sample")
+        if (sampleDir.exists() && sampleDir.isDirectory) {
+            val apks = sampleDir.listFiles { _, name -> name.endsWith(".apk") } ?: emptyArray()
             val parser = LiteApkParser()
-            val result = parser.analyzeApk(apkFile)
-            println("Real Malware APK Triage Result:")
-            println("Score: ${result.score}")
-            println("Status: ${result.status}")
-            println("Dangerous Permissions: ${result.dangerousPermissions}")
-            println("High Entropy Detected: ${result.highEntropyDetected}")
-            println("XOR Obfuscation Detected: ${result.xorObfuscationDetected}")
-            println("Matched Patterns: ${result.matchedPatterns}")
-            assertNotNull(result)
+            for (apk in apks) {
+                println("==================================================")
+                println("Analyzing APK: ${apk.name}")
+                val result = parser.analyzeApk(apk)
+                println("Score: ${result.score}")
+                println("Status: ${result.status}")
+                println("Dangerous Permissions: ${result.dangerousPermissions}")
+                println("High Entropy Detected: ${result.highEntropyDetected}")
+                println("XOR Obfuscation Detected: ${result.xorObfuscationDetected}")
+                println("Matched Patterns: ${result.matchedPatterns}")
+                println("==================================================")
+            }
         } else {
-            println("APK file not found at ${apkFile.absolutePath}, skipping test.")
+            println("Sample directory not found, skipping test.")
         }
     }
 
