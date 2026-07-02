@@ -2,28 +2,27 @@ package id.my.khuirulhuda.lib.liteapkparser
 
 internal object Deobfuscator {
 
+    private val INTERESTING_KEYWORDS = listOf(
+        "http://", "https://", "pm install", "cmd package", 
+        "bin/sh", "bin/su", "DexClassLoader", "frida", "xposed",
+        "isDebuggerConnected", "ro.kernel.qemu", "api.telegram.org",
+        "botToken", "bot_token", "botToken2", "/sendMessage", "chat_id"
+    )
+
     fun tryDecryptXorAndBase64(
         s: String, 
-        resultBuilder: LiteApkParser.AnalysisResultBuilder,
-        onDecrypted: (String) -> Unit
+        onDecrypted: (decryptedStr: String, logMsg: String) -> Unit
     ) {
         val clean = s.trim()
         if (clean.length < 8) return
 
-        val decodedBase64 = decodeBase64Pure(clean)
+        val decodedBase64 = Base64Decoder.decode(clean)
 
         val candidates = mutableListOf<ByteArray>()
         candidates.add(clean.toByteArray(Charsets.UTF_8))
         if (decodedBase64 != null) {
             candidates.add(decodedBase64)
         }
-
-        val interestingKeywords = listOf(
-            "http://", "https://", "pm install", "cmd package", 
-            "bin/sh", "bin/su", "DexClassLoader", "frida", "xposed",
-            "isDebuggerConnected", "ro.kernel.qemu", "api.telegram.org",
-            "botToken", "bot_token", "botToken2", "/sendMessage", "chat_id"
-        )
 
         for (candidateIdx in candidates.indices) {
             val candidate = candidates[candidateIdx]
@@ -59,13 +58,9 @@ internal object Deobfuscator {
                 }
 
                 if (decStr != null && decStr.length >= 6) {
-                    for (kw in interestingKeywords) {
+                    for (kw in INTERESTING_KEYWORDS) {
                         if (decStr.contains(kw, ignoreCase = true)) {
-                            println("    [DECRYPTED LITERAL (1-byte XOR key=$key)] '${decStr.trim()}'")
-                            resultBuilder.extractedEvidence.add(decStr.trim())
-                            resultBuilder.xorObfuscationDetected = true
-                            resultBuilder.verifiedObfuscatedPayload = true
-                            onDecrypted(decStr)
+                            onDecrypted(decStr, "[DECRYPTED LITERAL (1-byte XOR key=$key)] '${decStr.trim()}'")
                             break
                         }
                     }
@@ -76,20 +71,15 @@ internal object Deobfuscator {
 
     fun tryDecryptRepeatedXor(
         s: String,
-        resultBuilder: LiteApkParser.AnalysisResultBuilder,
-        onDecrypted: (String) -> Unit
+        onDecrypted: (decryptedStr: String, logMsg: String) -> Unit
     ) {
         val clean = s.trim()
         if (clean.length < 8) return
 
-        val decodedBase64 = decodeBase64Pure(clean)
+        val decodedBase64 = Base64Decoder.decode(clean)
         val candidate = decodedBase64 ?: clean.toByteArray(Charsets.UTF_8)
 
         val commonKeys = listOf("key", "secret", "payload", "token", "bot", "admin", "password")
-        val interestingKeywords = listOf(
-            "http://", "https://", "pm install", "cmd package", 
-            "bin/sh", "bin/su", "DexClassLoader", "api.telegram.org"
-        )
 
         for (keyStr in commonKeys) {
             val keyBytes = keyStr.toByteArray(Charsets.UTF_8)
@@ -105,13 +95,9 @@ internal object Deobfuscator {
             }
 
             if (decStr != null && decStr.length >= 6) {
-                for (kw in interestingKeywords) {
+                for (kw in INTERESTING_KEYWORDS) {
                     if (decStr.contains(kw, ignoreCase = true)) {
-                        println("    [DECRYPTED LITERAL (repeated XOR key=$keyStr)] '${decStr.trim()}'")
-                        resultBuilder.extractedEvidence.add(decStr.trim())
-                        resultBuilder.xorObfuscationDetected = true
-                        resultBuilder.verifiedObfuscatedPayload = true
-                        onDecrypted(decStr)
+                        onDecrypted(decStr, "[DECRYPTED LITERAL (repeated XOR key=$keyStr)] '${decStr.trim()}'")
                         break
                     }
                 }
@@ -122,17 +108,10 @@ internal object Deobfuscator {
     fun tryDecryptAes(
         ciphertextBase64: String,
         keys: List<String>,
-        resultBuilder: LiteApkParser.AnalysisResultBuilder,
-        onDecrypted: (String) -> Unit
+        onDecrypted: (decryptedStr: String, logMsg: String) -> Unit
     ) {
-        val ciphertextBytes = decodeBase64Pure(ciphertextBase64.trim()) ?: return
+        val ciphertextBytes = Base64Decoder.decode(ciphertextBase64.trim()) ?: return
         if (ciphertextBytes.size < 16) return
-
-        val interestingKeywords = listOf(
-            "http://", "https://", "pm install", "cmd package", 
-            "bin/sh", "bin/su", "DexClassLoader", "api.telegram.org",
-            "botToken", "bot_token", "chat_id", "/sendMessage"
-        )
 
         for (keyStr in keys) {
             val keyBytes = keyStr.toByteArray(Charsets.UTF_8)
@@ -150,13 +129,9 @@ internal object Deobfuscator {
                                 cipher.init(javax.crypto.Cipher.DECRYPT_MODE, keySpec, ivSpec)
                                 val decrypted = cipher.doFinal(ciphertextBytes)
                                 val decStr = String(decrypted, Charsets.UTF_8).trim()
-                                if (decStr.length >= 6 && interestingKeywords.any { decStr.contains(it, ignoreCase = true) }) {
+                                if (decStr.length >= 6 && INTERESTING_KEYWORDS.any { decStr.contains(it, ignoreCase = true) }) {
                                     val cleanedStr = decStr.filter { it.code in 32..126 || it == '\n' || it == '\r' || it == '\t' }.trim()
-                                    println("    [DECRYPTED LITERAL (AES/CBC key=$keyStr)] '$cleanedStr'")
-                                    resultBuilder.extractedEvidence.add(cleanedStr)
-                                    resultBuilder.xorObfuscationDetected = true
-                                    resultBuilder.verifiedObfuscatedPayload = true
-                                    onDecrypted(decStr)
+                                    onDecrypted(decStr, "[DECRYPTED LITERAL (AES/CBC key=$keyStr)] '$cleanedStr'")
                                     return
                                 }
                             } catch (e: Exception) {}
@@ -165,13 +140,9 @@ internal object Deobfuscator {
                         cipher.init(javax.crypto.Cipher.DECRYPT_MODE, keySpec)
                         val decrypted = cipher.doFinal(ciphertextBytes)
                         val decStr = String(decrypted, Charsets.UTF_8).trim()
-                        if (decStr.length >= 6 && interestingKeywords.any { decStr.contains(it, ignoreCase = true) }) {
+                        if (decStr.length >= 6 && INTERESTING_KEYWORDS.any { decStr.contains(it, ignoreCase = true) }) {
                             val cleanedStr = decStr.filter { it.code in 32..126 || it == '\n' || it == '\r' || it == '\t' }.trim()
-                            println("    [DECRYPTED LITERAL (AES/ECB key=$keyStr)] '$cleanedStr'")
-                            resultBuilder.extractedEvidence.add(cleanedStr)
-                            resultBuilder.xorObfuscationDetected = true
-                            resultBuilder.verifiedObfuscatedPayload = true
-                            onDecrypted(decStr)
+                            onDecrypted(decStr, "[DECRYPTED LITERAL (AES/ECB key=$keyStr)] '$cleanedStr'")
                             return
                         }
                     }
@@ -182,13 +153,8 @@ internal object Deobfuscator {
 
     fun scanShortArrays(
         dexBytes: ByteArray, 
-        resultBuilder: LiteApkParser.AnalysisResultBuilder,
-        onDecrypted: (String) -> Unit
+        onDecrypted: (decryptedStr: String, logMsg: String) -> Unit
     ) {
-        val interestingKeywords = listOf(
-            "api.telegram.org", "botToken", "/sendMessage", "chat_id", "http://", "https://"
-        )
-
         var foundPayloads = 0
         var offset = 0
         while (offset <= dexBytes.size - 8) {
@@ -214,16 +180,12 @@ internal object Deobfuscator {
                             chars[i] = (shortArray[i] xor key).toChar()
                         }
                         val decryptedStr = String(chars)
-                        for (kw in interestingKeywords) {
+                        for (kw in INTERESTING_KEYWORDS) {
                             if (decryptedStr.contains(kw, ignoreCase = true)) {
                                 val matches = extractPrintableSubstrings(decryptedStr)
                                 for (match in matches) {
                                     if (match.length >= 6) {
-                                        println("    [DECRYPTED SHORT ARRAY STRING (key=$key)] '$match'")
-                                        resultBuilder.extractedEvidence.add(match)
-                                        resultBuilder.xorObfuscationDetected = true
-                                        resultBuilder.verifiedObfuscatedPayload = true
-                                        onDecrypted(match)
+                                        onDecrypted(match, "[DECRYPTED SHORT ARRAY STRING (key=$key)] '$match'")
                                     }
                                 }
                                 break
@@ -234,7 +196,7 @@ internal object Deobfuscator {
             }
             offset += 2
         }
-        println("  [SHORT ARRAYS] Found $foundPayloads array-data payloads in this DEX")
+        Logger.d("Deobfuscator", "Found $foundPayloads array-data payloads in this DEX")
     }
 
     private fun extractPrintableSubstrings(s: String): List<String> {
@@ -254,37 +216,5 @@ internal object Deobfuscator {
             list.add(current.toString().trim())
         }
         return list
-    }
-
-    fun decodeBase64Pure(s: String): ByteArray? {
-        val tbl = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-        val clean = s.filter { !it.isWhitespace() }
-        if (clean.isEmpty() || clean.length % 4 != 0) return null
-        val outLen = (clean.length * 3) / 4 - when {
-            clean.endsWith("==") -> 2
-            clean.endsWith("=") -> 1
-            else -> 0
-        }
-        if (outLen <= 0) return null
-        val res = ByteArray(outLen)
-        var p = 0
-        var i = 0
-        try {
-            while (i < clean.length) {
-                val c1 = tbl.indexOf(clean[i])
-                val c2 = tbl.indexOf(clean[i + 1])
-                val c3 = if (clean[i + 2] == '=') 0 else tbl.indexOf(clean[i + 2])
-                val c4 = if (clean[i + 3] == '=') 0 else tbl.indexOf(clean[i + 3])
-                if (c1 == -1 || c2 == -1 || c3 == -1 || c4 == -1) return null
-                val triple = (c1 shl 18) or (c2 shl 12) or (c3 shl 6) or c4
-                if (p < outLen) res[p++] = ((triple shl 8) ushr 24).toByte()
-                if (p < outLen) res[p++] = ((triple shl 16) ushr 24).toByte()
-                if (p < outLen) res[p++] = ((triple shl 24) ushr 24).toByte()
-                i += 4
-            }
-            return res
-        } catch (e: Exception) {
-            return null
-        }
     }
 }

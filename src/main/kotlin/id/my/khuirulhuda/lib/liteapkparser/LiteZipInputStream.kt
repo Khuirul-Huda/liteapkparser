@@ -7,7 +7,6 @@ import java.util.zip.Inflater
 
 internal class LiteZipInputStream(rawStream: InputStream) {
     private val inputStream = PushbackInputStream(rawStream, 8192)
-    private val buffer = ByteArray(8192)
 
     data class ZipEntry(
         val name: String,
@@ -20,24 +19,24 @@ internal class LiteZipInputStream(rawStream: InputStream) {
     fun nextEntry(): ZipEntry? {
         val sigBytes = ByteArray(4)
         if (!readFully(sigBytes)) return null
-        val sig = readInt(sigBytes, 0)
+        val sig = ByteReader.readInt(sigBytes, 0)
         if (sig != 0x04034b50) {
             return null
         }
         val header = ByteArray(26)
         if (!readFully(header)) return null
-        val gpFlag = readUShort(header, 2)
-        val compressionMethod = readUShort(header, 4)
-        val compressedSize = readUInt(header, 14)
-        val uncompressedSize = readUInt(header, 18)
-        val fileNameLen = readUShort(header, 22)
-        val extraFieldLen = readUShort(header, 24)
+        val gpFlag = ByteReader.readUShort(header, 2)
+        val compressionMethod = ByteReader.readUShort(header, 4)
+        val compressedSize = ByteReader.readUInt(header, 14)
+        val uncompressedSize = ByteReader.readUInt(header, 18)
+        val fileNameLen = ByteReader.readUShort(header, 22)
+        val extraFieldLen = ByteReader.readUShort(header, 24)
 
         val fileNameBytes = ByteArray(fileNameLen)
         if (!readFully(fileNameBytes)) return null
         val fileName = String(fileNameBytes, Charsets.UTF_8)
 
-        skipFully(extraFieldLen.toLong())
+        ByteReader.skipFully(inputStream, extraFieldLen.toLong())
 
         return ZipEntry(fileName, compressionMethod, compressedSize, uncompressedSize, gpFlag)
     }
@@ -113,11 +112,11 @@ internal class LiteZipInputStream(rawStream: InputStream) {
             if ((entry.gpFlag and 0x08) != 0) {
                 val descSig = ByteArray(4)
                 if (readFully(descSig)) {
-                    val sig = readInt(descSig, 0)
+                    val sig = ByteReader.readInt(descSig, 0)
                     if (sig == 0x08074b50) {
-                        skipFully(12)
+                        ByteReader.skipFully(inputStream, 12)
                     } else {
-                        skipFully(8)
+                        ByteReader.skipFully(inputStream, 8)
                     }
                 }
             }
@@ -133,37 +132,5 @@ internal class LiteZipInputStream(rawStream: InputStream) {
             total += count
         }
         return true
-    }
-
-    private fun skipFully(n: Long) {
-        var remaining = n
-        while (remaining > 0) {
-            val skipped = inputStream.skip(remaining)
-            if (skipped <= 0) {
-                val toRead = minOf(remaining, buffer.size.toLong()).toInt()
-                val read = inputStream.read(buffer, 0, toRead)
-                if (read <= 0) break
-                remaining -= read
-            } else {
-                remaining -= skipped
-            }
-        }
-    }
-
-    private fun readInt(buf: ByteArray, offset: Int): Int {
-        if (offset + 3 >= buf.size) return 0
-        return (buf[offset].toInt() and 0xFF) or
-                ((buf[offset + 1].toInt() and 0xFF) shl 8) or
-                ((buf[offset + 2].toInt() and 0xFF) shl 16) or
-                ((buf[offset + 3].toInt() and 0xFF) shl 24)
-    }
-
-    private fun readUShort(buf: ByteArray, offset: Int): Int {
-        if (offset + 1 >= buf.size) return 0
-        return (buf[offset].toInt() and 0xFF) or ((buf[offset + 1].toInt() and 0xFF) shl 8)
-    }
-
-    private fun readUInt(buf: ByteArray, offset: Int): Long {
-        return readInt(buf, offset).toLong() and 0xFFFFFFFFL
     }
 }

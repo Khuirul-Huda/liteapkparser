@@ -26,19 +26,3 @@ internal class OffsetInputStream(private val inner: InputStream) : InputStream()
         inner.close()
     }
 }
-
-internal fun skipFully(inputStream: InputStream, n: Long) {
-    var remaining = n
-    val buffer = ByteArray(8192)
-    while (remaining > 0) {
-        val skipped = inputStream.skip(remaining)
-        if (skipped <= 0) {
-            val toRead = minOf(remaining, buffer.size.toLong()).toInt()
-            val read = inputStream.read(buffer, 0, toRead)
-            if (read <= 0) break
-            remaining -= read
-        } else {
-            remaining -= skipped
-        }
-    }
-}

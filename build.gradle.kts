@@ -1,41 +1,17 @@
 plugins {
-    id("com.android.library") version "8.4.0"
-    kotlin("android") version "1.9.24"
+    kotlin("jvm") version "1.9.24"
     id("maven-publish")
 }
 
-android {
-    namespace = "id.my.khuirulhuda.lib.liteapkparser"
-    compileSdk = 34
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+    withSourcesJar()
+}
 
-    defaultConfig {
-        minSdk = 21
-
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        consumerProguardFiles("consumer-rules.pro")
-    }
-
-    buildTypes {
-        release {
-            isMinifyEnabled = false
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
-        }
-    }
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
     kotlinOptions {
         jvmTarget = "17"
-    }
-
-    publishing {
-        singleVariant("release") {
-            withSourcesJar()
-        }
     }
 }
 
@@ -46,14 +22,12 @@ dependencies {
 
 publishing {
     publications {
-        register<MavenPublication>("release") {
+        register<MavenPublication>("mavenJava") {
             groupId = "id.my.khuirulhuda.lib"
             artifactId = "liteapkparser"
             version = "1.0.0"
 
-            afterEvaluate {
-                from(components["release"])
-            }
+            from(components["java"])
         }
     }
 }

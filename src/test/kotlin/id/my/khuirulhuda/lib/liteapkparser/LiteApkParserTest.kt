@@ -6,13 +6,15 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
-import java.lang.reflect.Method
 
 class LiteApkParserTest {
 
     @Test
     fun testAnalyzeApkReal() {
+        // Arrange
         val sampleDir = File("sample")
+        
+        // Act & Assert
         if (sampleDir.exists() && sampleDir.isDirectory) {
             val apks = sampleDir.listFiles { _, name -> name.endsWith(".apk") } ?: emptyArray()
             val parser = LiteApkParser()
@@ -28,19 +30,25 @@ class LiteApkParserTest {
                 println("Matched Patterns: ${result.matchedPatterns}")
                 println("Extracted Evidence: ${result.extractedEvidence}")
                 println("==================================================")
+                
+                // Assert basic sane values
+                assertTrue(result.score in 0..100)
+                assertNotNull(result.status)
             }
         } else {
-            println("Sample directory not found, skipping test.")
+            println("Sample directory not found, skipping integration test.")
         }
     }
 
     @Test
     fun testShannonEntropy() {
+        // Arrange
         val parser = LiteApkParser()
         val method = LiteApkParser::class.java.getDeclaredMethod("calculateShannonEntropy", String::class.java).apply {
             isAccessible = true
         }
 
+        // Act & Assert
         val entropyFlat = method.invoke(parser, "AAAAAA") as Double
         assertEquals(0.0, entropyFlat, 0.001)
 
@@ -48,54 +56,50 @@ class LiteApkParserTest {
         // H(X) = -6 * (1/6 * log2(1/6)) = log2(6) = 2.58496
         assertEquals(2.585, entropySeq, 0.001)
 
-        // Random-like string with high entropy
         val entropyHigh = method.invoke(parser, "q7a9vB#zP!wX9\$dM2@sK") as Double
         assertTrue(entropyHigh > 4.0)
     }
 
     @Test
     fun testXorOpcodeDetector() {
+        // Arrange
         val detector = XorOpcodeDetector()
 
-        // Feed unrelated bytes
+        // Act & Assert (unrelated bytes)
         for (i in 0..30) {
             val detected = detector.feed(0x00)
             assertFalse(detected)
         }
 
-        // Feed pattern
+        // Act & Assert (valid loop sequence: aget -> xor -> goto -> aput)
         assertFalse(detector.feed(0x48)) // aget-byte
         assertFalse(detector.feed(0x01))
         assertFalse(detector.feed(0xeb)) // xor
         assertFalse(detector.feed(0x02))
         assertFalse(detector.feed(0x28)) // loop branch (goto)
         
-        // Final trigger on aput-byte
         val detected = detector.feed(0x4c) // aput-byte
         assertTrue(detected)
     }
 
     @Test
     fun testMutf8Decoding() {
-        val parser = LiteApkParser()
-        val method = LiteApkParser::class.java.getDeclaredMethod("decodeMutf8", ByteArray::class.java).apply {
-            isAccessible = true
-        }
-
-        // ASCII string
+        // Arrange
         val asciiBytes = "Hello".toByteArray(Charsets.UTF_8)
-        val decodedAscii = method.invoke(parser, asciiBytes) as String
-        assertEquals("Hello", decodedAscii)
-
-        // UTF-8 multi-byte characters
         val multiByte = "tasbih".toByteArray(Charsets.UTF_8)
-        val decodedMulti = method.invoke(parser, multiByte) as String
+
+        // Act
+        val decodedAscii = ByteReader.decodeMutf8(asciiBytes)
+        val decodedMulti = ByteReader.decodeMutf8(multiByte)
+
+        // Assert
+        assertEquals("Hello", decodedAscii)
         assertEquals("tasbih", decodedMulti)
     }
 
     @Test
     fun testXorAndBase64Decryption() {
-        // 1. Prepare target string: "http://malicious-url.com"
+        // Arrange
         val target = "http://malicious-url.com"
         val key = 0x5A
         val encrypted = target.toByteArray(Charsets.UTF_8).map { (it.toInt() xor key).toByte() }.toByteArray()
@@ -116,18 +120,16 @@ class LiteApkParserTest {
             i += 3
         }
         val base64EncodedXored = sb.toString()
-        
-        // 2. Setup AnalysisResultBuilder
         val builder = LiteApkParser.AnalysisResultBuilder()
         
-        // 3. Invoke tryDecryptXorAndBase64
-        Deobfuscator.tryDecryptXorAndBase64(base64EncodedXored, builder) {
-            // Callback placeholder
+        // Act
+        Deobfuscator.tryDecryptXorAndBase64(base64EncodedXored) { dec, logMsg ->
+            builder.xorObfuscationDetected = true
+            builder.verifiedObfuscatedPayload = true
         }
         
-        // 4. Verify detection
+        // Assert
         assertTrue(builder.xorObfuscationDetected)
         assertTrue(builder.verifiedObfuscatedPayload)
     }
 }
-

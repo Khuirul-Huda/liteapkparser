@@ -1,6 +1,6 @@
 # LiteApkParser
 
-LiteApkParser is a lightweight, high-performance offline-first static triage security scanning library (AAR) written in Clean Kotlin. It is specifically designed to run directly on Android devices under strict memory constraints. It identifies suspicious patterns, obfuscation, droppers, and dangerous permissions in Android APK files **without executing any code** and **without decompressing the entire APK to disk**.
+LiteApkParser is a lightweight, high-performance offline-first static triage security scanning library (JAR) written in Clean Kotlin. It is specifically designed to run on both standard desktop JVM environments and directly on Android devices under strict memory constraints. It identifies suspicious patterns, obfuscation, droppers, and dangerous permissions in Android APK files **without executing any code** and **without decompressing the entire APK to disk**.
 
 > [!IMPORTANT]
 > **Disclaimer:** This tool is designed strictly for **educational purposes**, authorized research, and security analysis of Android packages. It must not be used for unauthorized target scanning or malicious activity. The author assumes no liability for misuse or damage caused by this utility.
@@ -31,7 +31,7 @@ LiteApkParser is a lightweight, high-performance offline-first static triage sec
 
 ### Local Installation & Consumption
 
-To use LiteApkParser in your own Android application, publish it locally to your Maven cache:
+To use LiteApkParser in your own Java/Kotlin JVM or Android application, publish it locally to your Maven cache:
 
 1.  **Publish to Maven Local:**
     ```bash

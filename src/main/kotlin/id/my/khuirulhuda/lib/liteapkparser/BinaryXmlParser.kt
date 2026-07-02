@@ -13,12 +13,12 @@ internal class BinaryXmlParser(private val data: ByteArray) {
 
     fun parse(): XmlManifestInfo {
         if (data.size < 8) return XmlManifestInfo(emptyList(), false, emptyList(), emptyList())
-        val magic = readInt(0)
-        println("  [DEBUG XML MAGIC] magic = ${String.format("0x%08X", magic)}")
+        val magic = ByteReader.readInt(data, 0)
+        Logger.d("BinaryXmlParser", "magic = ${String.format("0x%08X", magic)}")
         if (magic != 0x00080003) {
             return XmlManifestInfo(emptyList(), false, emptyList(), emptyList())
         }
-        val fileSize = readInt(4)
+        val fileSize = ByteReader.readInt(data, 4)
         offset = 8
 
         val permissions = mutableListOf<String>()
@@ -28,8 +28,8 @@ internal class BinaryXmlParser(private val data: ByteArray) {
         val services = mutableListOf<String>()
 
         while (offset < data.size && offset < fileSize) {
-            val chunkType = readInt(offset)
-            val chunkSize = readInt(offset + 4)
+            val chunkType = ByteReader.readInt(data, offset)
+            val chunkSize = ByteReader.readInt(data, offset + 4)
             if (chunkSize <= 0) break
 
             val type = chunkType and 0xFFFF
@@ -38,24 +38,24 @@ internal class BinaryXmlParser(private val data: ByteArray) {
                     parseStringPool(offset)
                 }
                 0x0102 -> { // RES_XML_START_ELEMENT_TYPE
-                    val nameIdx = readInt(offset + 20)
+                    val nameIdx = ByteReader.readInt(data, offset + 20)
                     val tagName = getString(nameIdx)
 
-                    val headerSize = readShort(offset + 2).toInt() and 0xFFFF
-                    val attrStart = readShort(offset + 24).toInt() and 0xFFFF
-                    val attrSize = readShort(offset + 26).toInt() and 0xFFFF
-                    val attrCount = readShort(offset + 28).toInt() and 0xFFFF
+                    val headerSize = ByteReader.readUShort(data, offset + 2) and 0xFFFF
+                    val attrStart = ByteReader.readUShort(data, offset + 24) and 0xFFFF
+                    val attrSize = ByteReader.readUShort(data, offset + 26) and 0xFFFF
+                    val attrCount = ByteReader.readUShort(data, offset + 28) and 0xFFFF
                     var attrOffset = offset + headerSize + attrStart
 
                     var attrNameValue: String? = null
 
                     for (i in 0 until attrCount) {
-                        readInt(attrOffset) // Namespace index (unused)
-                        val attrNameIdx = readInt(attrOffset + 4)
+                        ByteReader.readInt(data, attrOffset) // Namespace index (unused)
+                        val attrNameIdx = ByteReader.readInt(data, attrOffset + 4)
                         val attrName = getString(attrNameIdx)
-                        val rawValueIdx = readInt(attrOffset + 8)
+                        val rawValueIdx = ByteReader.readInt(data, attrOffset + 8)
                         val typedValueType = data[attrOffset + 15].toInt() and 0xFF
-                        val typedValueData = readInt(attrOffset + 16)
+                        val typedValueData = ByteReader.readInt(data, attrOffset + 16)
 
                         val attrVal = if (rawValueIdx != -1) {
                             getString(rawValueIdx)
@@ -86,7 +86,7 @@ internal class BinaryXmlParser(private val data: ByteArray) {
                     }
                 }
                 0x0103 -> { // RES_XML_END_ELEMENT_TYPE
-                    val nameIdx = readInt(offset + 20)
+                    val nameIdx = ByteReader.readInt(data, offset + 20)
                     val tagName = getString(nameIdx)
                     if (tagName == "receiver" || tagName == "service") {
                         currentComponentClass = null
@@ -100,16 +100,16 @@ internal class BinaryXmlParser(private val data: ByteArray) {
     }
 
     private fun parseStringPool(startOffset: Int) {
-        val stringCount = readInt(startOffset + 8)
-        val flags = readInt(startOffset + 16)
-        val stringStart = readInt(startOffset + 20)
+        val stringCount = ByteReader.readInt(data, startOffset + 8)
+        val flags = ByteReader.readInt(data, startOffset + 16)
+        val stringStart = ByteReader.readInt(data, startOffset + 20)
 
         val isUtf8 = (flags and 0x00000100) != 0
 
         var offsetsOffset = startOffset + 28
         val offsets = IntArray(stringCount)
         for (i in 0 until stringCount) {
-            offsets[i] = readInt(offsetsOffset)
+            offsets[i] = ByteReader.readInt(data, offsetsOffset)
             offsetsOffset += 4
         }
 
@@ -159,9 +159,9 @@ internal class BinaryXmlParser(private val data: ByteArray) {
     }
 
     private fun readUtf16Length(offset: Int): LengthResult {
-        val val1 = readShort(offset).toInt() and 0xFFFF
+        val val1 = ByteReader.readUShort(data, offset) and 0xFFFF
         return if ((val1 and 0x8000) != 0) {
-            val val2 = readShort(offset + 2).toInt() and 0xFFFF
+            val val2 = ByteReader.readUShort(data, offset + 2) and 0xFFFF
             LengthResult(((val1 and 0x7FFF) shl 16) or val2, 4)
         } else {
             LengthResult(val1, 2)
@@ -169,20 +169,6 @@ internal class BinaryXmlParser(private val data: ByteArray) {
     }
 
     private class LengthResult(val value: Int, val bytesRead: Int)
-
-    private fun readInt(offset: Int): Int {
-        if (offset + 3 >= data.size) return 0
-        return (data[offset].toInt() and 0xFF) or
-                ((data[offset + 1].toInt() and 0xFF) shl 8) or
-                ((data[offset + 2].toInt() and 0xFF) shl 16) or
-                ((data[offset + 3].toInt() and 0xFF) shl 24)
-    }
-
-    private fun readShort(offset: Int): Short {
-        if (offset + 1 >= data.size) return 0
-        val res = (data[offset].toInt() and 0xFF) or ((data[offset + 1].toInt() and 0xFF) shl 8)
-        return res.toShort()
-    }
 
     private fun getString(index: Int): String {
         if (index in 0 until stringPool.size) {
