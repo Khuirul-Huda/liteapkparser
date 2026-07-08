@@ -16,53 +16,42 @@ internal object Deobfuscator {
         val clean = s.trim()
         if (clean.length < 8) return
 
-        val decodedBase64 = Base64Decoder.decode(clean)
+        // XOR obfuscated payloads in DEX files must be Base64-encoded to be valid pool strings.
+        // We only brute force Base64 strings to avoid wasting CPU on normal plaintext strings.
+        val decodedBase64 = Base64Decoder.decode(clean) ?: return
 
-        val candidates = mutableListOf<ByteArray>()
-        candidates.add(clean.toByteArray(Charsets.UTF_8))
-        if (decodedBase64 != null) {
-            candidates.add(decodedBase64)
-        }
+        for (key in 0..255) {
+            val decrypted = ByteArray(decodedBase64.size)
+            for (i in decodedBase64.indices) {
+                decrypted[i] = (decodedBase64[i].toInt() xor key).toByte()
+            }
+            
+            // Trim trailing and leading control bytes from decrypted array before decoding
+            var start = 0
+            var end = decrypted.size - 1
+            while (start <= end && decrypted[start].toInt() in 0..31) {
+                start++
+            }
+            while (end >= start && decrypted[end].toInt() in 0..31) {
+                end--
+            }
+            if (start > end) continue
 
-        for (candidateIdx in candidates.indices) {
-            val candidate = candidates[candidateIdx]
-            val isBase64 = (candidateIdx > 0)
+            val decStr = try {
+                val str = String(decrypted, start, end - start + 1, Charsets.UTF_8)
+                val printableCount = str.count { it.code in 32..126 || it == '\n' || it == '\r' || it == '\t' }
+                if (printableCount.toDouble() / str.length >= 0.90) {
+                    str.filter { it.code in 32..126 || it == '\n' || it == '\r' || it == '\t' }
+                } else null
+            } catch (e: Exception) {
+                null
+            }
 
-            for (key in 0..255) {
-                if (!isBase64 && key == 0) continue
-
-                val decrypted = ByteArray(candidate.size)
-                for (i in candidate.indices) {
-                    decrypted[i] = (candidate[i].toInt() xor key).toByte()
-                }
-                
-                // Trim trailing and leading control bytes from decrypted array before decoding
-                var start = 0
-                var end = decrypted.size - 1
-                while (start <= end && decrypted[start].toInt() in 0..31) {
-                    start++
-                }
-                while (end >= start && decrypted[end].toInt() in 0..31) {
-                    end--
-                }
-                if (start > end) continue
-
-                val decStr = try {
-                    val str = String(decrypted, start, end - start + 1, Charsets.UTF_8)
-                    val printableCount = str.count { it.code in 32..126 || it == '\n' || it == '\r' || it == '\t' }
-                    if (printableCount.toDouble() / str.length >= 0.90) {
-                        str.filter { it.code in 32..126 || it == '\n' || it == '\r' || it == '\t' }
-                    } else null
-                } catch (e: Exception) {
-                    null
-                }
-
-                if (decStr != null && decStr.length >= 6) {
-                    for (kw in INTERESTING_KEYWORDS) {
-                        if (decStr.contains(kw, ignoreCase = true)) {
-                            onDecrypted(decStr, "[DECRYPTED LITERAL (1-byte XOR key=$key)] '${decStr.trim()}'")
-                            break
-                        }
+            if (decStr != null && decStr.length >= 6) {
+                for (kw in INTERESTING_KEYWORDS) {
+                    if (decStr.contains(kw, ignoreCase = true)) {
+                        onDecrypted(decStr, "[DECRYPTED LITERAL (1-byte XOR key=$key)] '${decStr.trim()}'")
+                        break
                     }
                 }
             }
@@ -76,16 +65,14 @@ internal object Deobfuscator {
         val clean = s.trim()
         if (clean.length < 8) return
 
-        val decodedBase64 = Base64Decoder.decode(clean)
-        val candidate = decodedBase64 ?: clean.toByteArray(Charsets.UTF_8)
-
+        val decodedBase64 = Base64Decoder.decode(clean) ?: return
         val commonKeys = listOf("key", "secret", "payload", "token", "bot", "admin", "password")
 
         for (keyStr in commonKeys) {
             val keyBytes = keyStr.toByteArray(Charsets.UTF_8)
-            val decrypted = ByteArray(candidate.size)
-            for (i in candidate.indices) {
-                decrypted[i] = (candidate[i].toInt() xor keyBytes[i % keyBytes.size].toInt()).toByte()
+            val decrypted = ByteArray(decodedBase64.size)
+            for (i in decodedBase64.indices) {
+                decrypted[i] = (decodedBase64[i].toInt() xor keyBytes[i % keyBytes.size].toInt()).toByte()
             }
             val decStr = try {
                 val str = String(decrypted, Charsets.UTF_8)
@@ -175,10 +162,19 @@ internal object Deobfuscator {
                     }
 
                     for (key in 0..65535) {
+                        var isValid = true
                         val chars = CharArray(count)
                         for (i in 0 until count) {
-                            chars[i] = (shortArray[i] xor key).toChar()
+                            val dec = shortArray[i] xor key
+                            // Only allow printable ASCII and common white space (\n, \r, \t)
+                            if (dec !in 32..126 && dec != 10 && dec != 13 && dec != 9) {
+                                isValid = false
+                                break
+                            }
+                            chars[i] = dec.toChar()
                         }
+                        if (!isValid) continue
+
                         val decryptedStr = String(chars)
                         for (kw in INTERESTING_KEYWORDS) {
                             if (decryptedStr.contains(kw, ignoreCase = true)) {
